@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int            @id @default(autoincrement())
+  username     String         @unique @db.VarChar(64)
+  passwordHash String         @db.VarChar(255)
+  role         String         @default("normal") @db.VarChar(16)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  songs        Song[]
+  comments     Comment[]
+  friends      UserRelation[] @relation("UserFriends")
+  friendOf     UserRelation[] @relation("FriendOf")
+  playlists    Playlist[]
+}
+
+model Song {
+  id          Int       @id @default(autoincrement())
+  title       String    @db.VarChar(255)
+  artist      String    @default("") @db.VarChar(255)
+  album       String    @default("") @db.VarChar(255)
+  durationSec Int       @default(0)
+  coverUrl    String    @default("") @db.VarChar(1024)
+  sourcePath  String    @unique @db.VarChar(1024)
+  visibility  String    @default("private") @db.VarChar(16)
+  ownerId     Int
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  owner         User           @relation(fields: [ownerId], references: [id])
+  comments      Comment[]
+  playlistItems PlaylistSong[]
+}
+
+model Comment {
+  id        Int      @id @default(autoincrement())
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  userId    Int
+  songId    Int
+
+  user      User     @relation(fields: [userId], references: [id])
+  song      Song     @relation(fields: [songId], references: [id])
+}
+
+model UserRelation {
+  userId    Int
+  friendId  Int
+  createdAt DateTime @default(now())
+
+  user      User     @relation("UserFriends", fields: [userId], references: [id])
+  friend    User     @relation("FriendOf", fields: [friendId], references: [id])
+
+  @@unique([userId, friendId])
+}
+
+model Playlist {
+  id          Int            @id @default(autoincrement())
+  name        String         @db.VarChar(255)
+  description String         @default("") @db.VarChar(512)
+  ownerId     Int
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  owner       User           @relation(fields: [ownerId], references: [id])
+  items       PlaylistSong[]
+}
+
+model PlaylistSong {
+  id         Int      @id @default(autoincrement())
+  playlistId Int
+  songId     Int
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  song       Song     @relation(fields: [songId], references: [id], onDelete: Cascade)
+
+  @@unique([playlistId, songId])
+}

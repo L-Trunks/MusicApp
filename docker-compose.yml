@@ -1,0 +1,74 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: musicapp_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: musicapp
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-root}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    # 不对宿主机暴露 3306，避免与本地 MySQL 冲突；容器间通过 Docker 网络直接通信
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - musicapp_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: musicapp_backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://root:${MYSQL_PASSWORD:-root}@mysql:3306/musicapp
+      JWT_SECRET: ${JWT_SECRET:-please-change-this-secret-in-production}
+      PORT: 3001
+      MUSIC_ROOT_PATH: /music
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      NODE_ENV: production
+      NETEASE_API_URL: ${NETEASE_API_URL:-}
+      NETEASE_COOKIE: ${NETEASE_COOKIE:-}
+    volumes:
+      - ./backend/music:/music
+    ports:
+      - "127.0.0.1:3001:3001"    # 仅本机 Nginx 可访问，不对外暴露
+    networks:
+      - musicapp_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001}
+    container_name: musicapp_frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      PORT: 3000
+      HOSTNAME: "0.0.0.0"
+    ports:
+      - "127.0.0.1:3000:3000"    # 仅本机 Nginx 可访问，不对外暴露
+    networks:
+      - musicapp_net
+
+volumes:
+  mysql_data:
+
+networks:
+  musicapp_net:
+    driver: bridge
