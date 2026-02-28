@@ -12,6 +12,8 @@ RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src/
 RUN npx prisma generate
+# 构建时提高 Node 堆内存上限，避免 tsc 在低内存环境下 OOM
+ENV NODE_OPTIONS=--max-old-space-size=2048
 RUN npm run build
 
 # ---- Production image ----
