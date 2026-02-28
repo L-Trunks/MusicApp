@@ -11,8 +11,8 @@ RUN npm ci
 
 COPY tsconfig.json ./
 COPY src ./src/
-RUN npm run build
 RUN npx prisma generate
+RUN npm run build
 
 # ---- Production image ----
 FROM node:20-slim AS runner

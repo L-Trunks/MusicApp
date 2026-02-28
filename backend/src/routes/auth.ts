@@ -5,8 +5,8 @@ import crypto from 'crypto';
 import prisma from '../lib/prisma';
 import { authenticate, AuthRequest } from '../middleware/auth';
 
-const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-production';
+const JWT_EXPIRES_IN = '3d'; // 3 天过期，访问时刷新
 
 // ----- 验证码内存存储（captchaId -> { answer, expiresAt }），提交后一次性删除 -----
 const CAPTCHA_TTL_MS = 5 * 60 * 1000; // 5 分钟
@@ -24,6 +24,8 @@ function cleanupExpiredCaptcha() {
     if (v.expiresAt < now) captchaStore.delete(id);
   }
 }
+
+const router = Router();
 
 // GET /api/auth/captcha — 获取验证码（数学题），用于登录/注册
 router.get('/captcha', (_req: Request, res: Response) => {
@@ -73,7 +75,7 @@ router.post('/register', async (req: Request, res: Response) => {
     return;
   }
 
-  const { username, password, captchaId, captchaAnswer } = req.body;
+  const { username, password, captchaId, captchaAnswer, inviteCode } = req.body;
 
   if (!captchaId || !captchaAnswer) {
     res.status(400).json({ error: '请完成验证码' });
@@ -83,7 +85,10 @@ router.post('/register', async (req: Request, res: Response) => {
     res.status(400).json({ error: '验证码错误或已过期，请刷新后重试' });
     return;
   }
-
+  if (!inviteCode || typeof inviteCode !== 'string' || !String(inviteCode).trim()) {
+    res.status(400).json({ error: '请输入邀请码' });
+    return;
+  }
   if (!username || !password) {
     res.status(400).json({ error: '用户名和密码不能为空' });
     return;
@@ -98,6 +103,14 @@ router.post('/register', async (req: Request, res: Response) => {
   }
 
   try {
+    const codeRow = await prisma.inviteCode.findFirst({
+      where: { code: String(inviteCode).trim(), usedAt: null },
+    });
+    if (!codeRow) {
+      res.status(400).json({ error: '邀请码无效或已被使用' });
+      return;
+    }
+
     const existing = await prisma.user.findUnique({ where: { username } });
     if (existing) {
       res.status(409).json({ error: '用户名已存在' });
@@ -113,7 +126,12 @@ router.post('/register', async (req: Request, res: Response) => {
       select: { id: true, username: true, role: true, createdAt: true },
     });
 
-    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+    await prisma.inviteCode.update({
+      where: { id: codeRow.id },
+      data: { usedAt: new Date(), usedById: user.id },
+    });
+
+    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
     res.status(201).json({ token, user });
   } catch (err) {
     console.error('Register error:', err);
@@ -158,7 +176,7 @@ router.post('/login', async (req: Request, res: Response) => {
       return;
     }
 
-    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
     res.json({
       token,
       user: { id: user.id, username: user.username, role: user.role, createdAt: user.createdAt },
@@ -169,7 +187,7 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/auth/me
+// GET /api/auth/me — 返回用户信息；若带有效 token 则同时返回新 token（刷新 3 天过期）
 router.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
   try {
     const user = await prisma.user.findUnique({
@@ -180,7 +198,8 @@ router.get('/me', authenticate, async (req: AuthRequest, res: Response) => {
       res.status(404).json({ error: '用户不存在' });
       return;
     }
-    res.json(user);
+    const token = jwt.sign({ userId: user.id, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+    res.json({ user, token });
   } catch (err) {
     console.error('Me error:', err);
     res.status(500).json({ error: '服务器内部错误' });

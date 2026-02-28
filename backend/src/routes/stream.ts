@@ -104,6 +104,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
         'Accept-Ranges': 'bytes',
         'Content-Length': chunkSize,
         'Content-Type': contentType,
+        'Cache-Control': 'private, max-age=86400',
       });
 
       stream.pipe(res);
@@ -112,6 +113,7 @@ router.get('/:id', async (req: AuthRequest, res: Response) => {
         'Content-Length': fileSize,
         'Content-Type': contentType,
         'Accept-Ranges': 'bytes',
+        'Cache-Control': 'private, max-age=86400',
       });
       fs.createReadStream(filePath).pipe(res);
     }

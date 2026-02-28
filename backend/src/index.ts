@@ -11,8 +11,10 @@ import commentRoutes from './routes/comments';
 import friendRoutes from './routes/friends';
 import adminRoutes from './routes/admin';
 import playlistRoutes from './routes/playlists';
+import playbackStateRoutes from './routes/playbackState';
 import uploadRoutes from './routes/upload';
 import searchRoutes from './routes/search';
+import cloudRoutes from './routes/cloud';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -36,8 +38,10 @@ app.use('/api/songs/:id/comments', commentRoutes);
 app.use('/api/stream', streamRoutes);
 app.use('/api/me/friends', friendRoutes);
 app.use('/api/playlists', playlistRoutes);
+app.use('/api/me/playback-state', playbackStateRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/cloud', cloudRoutes);
 app.use('/api/admin', adminRoutes);
 
 // 404 handler

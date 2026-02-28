@@ -20,6 +20,26 @@ model User {
   friends      UserRelation[] @relation("UserFriends")
   friendOf     UserRelation[] @relation("FriendOf")
   playlists    Playlist[]
+  playbackState PlaybackState?
+}
+
+model PlaybackState {
+  id         Int      @id @default(autoincrement())
+  userId     Int      @unique
+  state      Json     // { songIds, currentIndex, currentTime, playMode, lastPositionBySongId?, ... }
+  updatedAt  DateTime @updatedAt
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model InviteCode {
+  id        Int       @id @default(autoincrement())
+  code      String    @unique @db.VarChar(32)
+  usedAt    DateTime? @db.DateTime(0)
+  usedById  Int?
+  createdAt DateTime  @default(now()) @db.DateTime(0)
+
+  @@index([code])
 }
 
 model Song {

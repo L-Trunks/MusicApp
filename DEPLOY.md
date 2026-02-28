@@ -1,7 +1,7 @@
 # MusicApp 服务器部署与 Nginx 配置指南
 
-本文档面向 **Ubuntu 22.04 / Debian 12** 服务器（其他 Linux 发行版操作类似），
-假设端口 **80 已被占用**，使用 **Let's Encrypt DNS-01 验证**获取免费证书（无需 80 端口），并配置自动续期。
+本文档面向 **Ubuntu 22.04 / Debian 12** 服务器（其他 Linux 发行版操作类似）。
+**示例域名为 music.chrisers.cc（主域 chrisers.cc）**；若 80 端口已被占用，可使用 Let's Encrypt **DNS-01 验证**获取证书并配置自动续期。
 
 ---
 
@@ -52,6 +52,9 @@ mysql:3306 (仅 Docker 网络内可达)
 | 前端 | 127.0.0.1:3000 | 仅本机内部访问 |
 | 后端 | 127.0.0.1:3001 | 仅本机内部访问 |
 | MySQL | 无（不暴露） | 仅 Docker 网络内部 |
+
+**域名解析示例（music.chrisers.cc）**  
+主域 chrisers.cc 时，在 DNS 处添加 A 记录：主机记录 **music**，记录值 **服务器公网 IP**。保存后 `ping music.chrisers.cc` 应解析到该 IP。
 
 ---
 
@@ -189,10 +192,12 @@ sudo certbot certonly \
 # 将项目中的 Nginx 配置复制到系统目录
 sudo cp /path/to/MusicApp/nginx/musicapp.conf /etc/nginx/sites-available/musicapp
 
-# 编辑配置，将所有 music.yourdomain.com 替换为真实域名
+# 将配置中的占位域名替换为你的域名（以 music.chrisers.cc 为例）
+sudo sed -i 's/music\.yourdomain\.com/music.chrisers.cc/g' /etc/nginx/sites-available/musicapp
+
+# 若使用其他域名，将上面 sed 中的 music.chrisers.cc 改为你的域名；或手动编辑：
 sudo nano /etc/nginx/sites-available/musicapp
-# 或使用 sed 批量替换：
-sudo sed -i 's/music\.yourdomain\.com/music.你的域名.com/g' /etc/nginx/sites-available/musicapp
+# 确认所有 music.yourdomain.com 均已改为目标域名（如 music.chrisers.cc）
 
 # 启用配置
 sudo ln -sf /etc/nginx/sites-available/musicapp /etc/nginx/sites-enabled/musicapp
@@ -259,11 +264,11 @@ MYSQL_PASSWORD=换成强密码_至少16位
 # JWT（生产环境必须修改！用随机字符串）
 JWT_SECRET=生成方式：openssl rand -base64 48
 
-# 前端访问后端的地址 ← 设置为你的域名（带 https）
-NEXT_PUBLIC_API_URL=https://music.yourdomain.com
+# 前端访问后端的地址 ← 设置为你的域名（带 https），示例：music.chrisers.cc
+NEXT_PUBLIC_API_URL=https://music.chrisers.cc
 
 # 后端允许的前端来源（CORS）
-FRONTEND_URL=https://music.yourdomain.com
+FRONTEND_URL=https://music.chrisers.cc
 
 # Docker 容器内音乐文件挂载路径（固定为 /music，宿主机目录见 docker-compose.yml）
 MUSIC_ROOT_PATH=/music
@@ -332,7 +337,7 @@ mkdir -p backend/music
 
 ### 6.3 首次注册管理员账号
 
-打开浏览器访问 `https://music.yourdomain.com`，
+打开浏览器访问 `https://music.chrisers.cc`（或你配置的域名），
 点击「注册」，**第一个注册的账号自动成为 admin**。
 
 ---

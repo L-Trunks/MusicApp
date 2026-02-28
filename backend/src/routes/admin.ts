@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import prisma from '../lib/prisma';
 import { authenticate, requireAdmin, AuthRequest } from '../middleware/auth';
 
@@ -12,6 +13,36 @@ const AUDIO_EXTENSIONS = new Set([
 ]);
 
 router.use(authenticate, requireAdmin);
+
+// ============ 邀请码（仅管理员） ============
+
+// GET /api/admin/invite-codes
+router.get('/invite-codes', async (_req: AuthRequest, res: Response) => {
+  try {
+    const list = await prisma.inviteCode.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+    res.json(list);
+  } catch (err) {
+    console.error('Admin get invite codes error:', err);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
+
+// POST /api/admin/invite-codes — 生成一个邀请码
+router.post('/invite-codes', async (_req: AuthRequest, res: Response) => {
+  try {
+    const code = crypto.randomBytes(8).toString('hex').toUpperCase();
+    const row = await prisma.inviteCode.create({
+      data: { code },
+    });
+    res.status(201).json({ id: row.id, code: row.code, createdAt: row.createdAt });
+  } catch (err) {
+    console.error('Admin create invite code error:', err);
+    res.status(500).json({ error: '服务器内部错误' });
+  }
+});
 
 // ============ 用户管理 ============
 

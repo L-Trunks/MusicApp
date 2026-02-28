@@ -21,9 +21,10 @@ export default function Home() {
       try {
         const user = JSON.parse(userStr) as User;
         setAuth({ token, user });
-        authApi.me(token).then((fresh) => {
-          setAuth({ token, user: fresh });
-          localStorage.setItem('user', JSON.stringify(fresh));
+        authApi.me(token).then((data) => {
+          setAuth({ token: data.token, user: data.user });
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('user', JSON.stringify(data.user));
         }).catch(() => {
           localStorage.removeItem('token');
           localStorage.removeItem('user');

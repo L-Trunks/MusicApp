@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  songsApi, playlistsApi, searchApi, getStreamUrl, adminApi,
+  songsApi, playlistsApi, searchApi, getStreamUrl, adminApi, playbackStateApi,
 } from '../lib/api';
 import {
   Song, User, Playlist, PlayMode, ExternalSong,
@@ -111,10 +111,16 @@ export default function PlayerPage({ token, currentUser }: Props) {
   const mediaRef = useRef<HTMLVideoElement>(null);
   const searchTimeout = useRef<ReturnType<typeof setTimeout>>();
   const songListRef = useRef<HTMLDivElement>(null);
+  const savePlaybackStateTimeout = useRef<ReturnType<typeof setTimeout>>();
+  const hasRestoredState = useRef(false);
+  const skipNextFilterForRestore = useRef(false);
+  const restoredQueueActive = useRef(false);
   // 当前播放的歌曲 ID，用于在筛选/搜索后仍能定位
   const currentSongIdRef = useRef<number>(-1);
   // 当前用于上一首/下一首的列表，与 displaySongs 同步，避免闭包陈旧
   const displaySongsRef = useRef<Song[]>([]);
+  const restoreCurrentTimeRef = useRef<number | null>(null);
+  const lastPositionBySongIdRef = useRef<Record<number, number>>({});
 
   const currentSong = currentIndex >= 0 ? displaySongs[currentIndex] : null;
   // resolveIsVideo 优先使用虚拟歌曲的 isVideoHint，其次才走扩展名检测
@@ -126,6 +132,43 @@ export default function PlayerPage({ token, currentUser }: Props) {
   }, [token]);
 
   useEffect(() => { loadPlaylists(); }, [loadPlaylists]);
+
+  // ── restore playback state (once per session) ─────────────────────────────
+  useEffect(() => {
+    if (!token || hasRestoredState.current) return;
+    let cancelled = false;
+    playbackStateApi.get(token).then((state) => {
+      if (cancelled || !state || !state.songIds?.length) return;
+      hasRestoredState.current = true;
+      songsApi.list(token).then((songs) => {
+        if (cancelled) return;
+        const list: Song[] = state.songIds
+          .map((id) => songs.find((s) => s.id === id))
+          .filter((s): s is Song => Boolean(s));
+        const extra = (state.queueExtra || []).map((e) =>
+          makeVirtualSong(e.title, e.artist, e.album, e.sourcePath, e.coverUrl || '', e.durationSec, e.isVideoHint)
+        );
+        const restored = [...list, ...extra];
+        skipNextFilterForRestore.current = true;
+        restoredQueueActive.current = true;
+        setAllSongs(songs);
+        setDisplaySongs(restored);
+        displaySongsRef.current = restored;
+        const idx = Math.min(state.currentIndex, Math.max(0, restored.length - 1));
+        setCurrentIndex(idx);
+        setCurrentTime(state.currentTime || 0);
+        setPlayMode(state.playMode || 'sequential');
+        if (state.volume != null) setVolume(state.volume);
+        if (state.playbackRate != null) setPlaybackRate(state.playbackRate);
+        if (state.shuffleOrder?.length) setShuffleOrder(state.shuffleOrder);
+        const cur = restored[idx];
+        if (cur) currentSongIdRef.current = cur.id;
+        restoreCurrentTimeRef.current = state.currentTime ?? 0;
+        lastPositionBySongIdRef.current = state.lastPositionBySongId ?? {};
+      });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [token]);
 
   // ── load songs (always fetches all, filtering is client-side) ──────────────
   const loadSongs = useCallback(async () => {
@@ -147,8 +190,12 @@ export default function PlayerPage({ token, currentUser }: Props) {
   useEffect(() => { loadSongs(); }, [loadSongs]);
 
   // ── client-side filter: album + search ─────────────────────────────────────
-  // Runs whenever source data or filter criteria change
   useEffect(() => {
+    if (restoredQueueActive.current) return;
+    if (skipNextFilterForRestore.current) {
+      skipNextFilterForRestore.current = false;
+      return;
+    }
     let filtered = allSongs;
 
     // Apply album filter only when viewing all songs (not a specific playlist)
@@ -174,6 +221,10 @@ export default function PlayerPage({ token, currentUser }: Props) {
     }
   }, [allSongs, albumFilter, localSearch, activePlaylistId]); // eslint-disable-line
 
+  useEffect(() => {
+    restoredQueueActive.current = false;
+  }, [activePlaylistId, albumFilter]);
+
   // ── media element sync ────────────────────────────────────────────────────
   useEffect(() => {
     const el = mediaRef.current;
@@ -185,8 +236,13 @@ export default function PlayerPage({ token, currentUser }: Props) {
     }
     el.playbackRate = playbackRate;
     el.volume = volume;
-    if (isPlaying) el.play().catch(() => setIsPlaying(false));
-    else el.pause();
+    if (isPlaying) {
+      const doPlay = () => el.play().catch(() => setIsPlaying(false));
+      if (el.readyState >= 3) doPlay();
+      else el.addEventListener('canplaythrough', doPlay, { once: true });
+    } else {
+      el.pause();
+    }
   }, [currentSong]); // eslint-disable-line
 
   useEffect(() => {
@@ -204,9 +260,68 @@ export default function PlayerPage({ token, currentUser }: Props) {
   useEffect(() => {
     const el = mediaRef.current;
     if (!el) return;
-    if (isPlaying) el.play().catch(() => setIsPlaying(false));
-    else el.pause();
+    if (isPlaying) {
+      const doPlay = () => el.play().catch(() => setIsPlaying(false));
+      if (el.readyState >= 3) doPlay();
+      else el.addEventListener('canplaythrough', doPlay, { once: true });
+    } else {
+      el.pause();
+    }
   }, [isPlaying]);
+
+  // ── persist playback state (debounced + on page hide) ──────────────────────
+  const savePlaybackState = useCallback(() => {
+    const list = displaySongsRef.current;
+    if (!list.length) return;
+    const songIds = list.filter((s) => s.id !== -1).map((s) => s.id);
+    const queueExtra = list
+      .filter((s) => s.id === -1)
+      .map((s) => ({
+        title: s.title,
+        artist: s.artist || '',
+        album: s.album || '',
+        sourcePath: s.sourcePath || '',
+        coverUrl: s.coverUrl,
+        durationSec: s.durationSec || 0,
+        isVideoHint: s.isVideoHint,
+      }));
+    const curIdx = list.findIndex((s) => s.id === currentSongIdRef.current);
+    const idx = curIdx >= 0 ? curIdx : 0;
+    const el = mediaRef.current;
+    const cTime = el ? el.currentTime : 0;
+    const curId = currentSongIdRef.current;
+    const curSong = list.find((s) => s.id === curId);
+    const nextLastPos = { ...lastPositionBySongIdRef.current };
+    if (curSong && curSong.durationSec >= 600 && curId > 0) {
+      nextLastPos[curId] = cTime;
+    }
+    playbackStateApi.put(token, {
+      songIds,
+      queueExtra,
+      currentIndex: idx,
+      currentTime: cTime,
+      playMode,
+      volume,
+      playbackRate,
+      shuffleOrder: shuffleOrder.length ? shuffleOrder : undefined,
+      lastPositionBySongId: nextLastPos,
+    }).catch(() => {});
+  }, [token, playMode, volume, playbackRate, shuffleOrder]);
+
+  useEffect(() => {
+    const t = setTimeout(savePlaybackState, 1500);
+    return () => clearTimeout(t);
+  }, [displaySongs, currentIndex, playMode, volume, playbackRate, shuffleOrder, savePlaybackState]);
+
+  useEffect(() => {
+    const onHide = () => savePlaybackState();
+    window.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onHide);
+    return () => {
+      window.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onHide);
+    };
+  }, [savePlaybackState]);
 
   // ── media events ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -214,6 +329,16 @@ export default function PlayerPage({ token, currentUser }: Props) {
     if (!el) return;
     const onTime = () => setCurrentTime(el.currentTime);
     const onDur  = () => setDuration(el.duration || 0);
+    const onCanPlay = () => {
+      if (restoreCurrentTimeRef.current != null) {
+        const t = restoreCurrentTimeRef.current;
+        restoreCurrentTimeRef.current = null;
+        if (el.duration && t < el.duration) {
+          el.currentTime = t;
+          setCurrentTime(t);
+        }
+      }
+    };
     const onEnd  = () => {
       const list = displaySongsRef.current;
       if (!list.length) return;
@@ -229,12 +354,14 @@ export default function PlayerPage({ token, currentUser }: Props) {
     const onPause = () => setIsPlaying(false);
     el.addEventListener('timeupdate', onTime);
     el.addEventListener('durationchange', onDur);
+    el.addEventListener('canplay', onCanPlay);
     el.addEventListener('ended', onEnd);
     el.addEventListener('play', onPlay);
     el.addEventListener('pause', onPause);
     return () => {
       el.removeEventListener('timeupdate', onTime);
       el.removeEventListener('durationchange', onDur);
+      el.removeEventListener('canplay', onCanPlay);
       el.removeEventListener('ended', onEnd);
       el.removeEventListener('play', onPlay);
       el.removeEventListener('pause', onPause);
@@ -289,7 +416,15 @@ export default function PlayerPage({ token, currentUser }: Props) {
   // ── playback controls ─────────────────────────────────────────────────────
   const playSongAt = (index: number) => {
     const song = displaySongs[index];
-    if (song) currentSongIdRef.current = song.id; // persist across filtering
+    if (song) {
+      currentSongIdRef.current = song.id;
+      const savedPos = lastPositionBySongIdRef.current[song.id];
+      if (song.durationSec >= 600 && typeof savedPos === 'number' && savedPos > 0) {
+        restoreCurrentTimeRef.current = savedPos;
+      } else {
+        restoreCurrentTimeRef.current = null;
+      }
+    }
     setCurrentIndex(index);
     setIsPlaying(true);
     if (playMode === 'shuffle') {
@@ -518,9 +653,10 @@ export default function PlayerPage({ token, currentUser }: Props) {
   };
 
   // ─── render ───────────────────────────────────────────────────────────────
+  const PLAYER_BAR_H = 80;
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      {/* ── main area: sidebar + song list ── */}
+    <div className="h-full flex flex-col overflow-hidden" style={{ paddingBottom: PLAYER_BAR_H }}>
+      {/* ── main area: sidebar + song list（仅此区域可滚动）── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
         {/* ── Playlist Sidebar ── */}
@@ -1080,6 +1216,7 @@ export default function PlayerPage({ token, currentUser }: Props) {
               </div>
             </div>
           )}
+
         </div>
       </div>
 
@@ -1103,8 +1240,9 @@ export default function PlayerPage({ token, currentUser }: Props) {
         />
       )}
 
-      {/* ── Player Bar ── */}
-      <PlayerBar
+      {/* ── Player Bar（固定底部）── */}
+      <div className="fixed bottom-0 left-0 right-0 z-30" style={{ height: PLAYER_BAR_H }}>
+        <PlayerBar
         currentSong={currentSong}
         isPlaying={isPlaying}
         currentTime={currentTime}
@@ -1131,12 +1269,13 @@ export default function PlayerPage({ token, currentUser }: Props) {
         onOpenPlaylist={() => setShowPlaylistDrawer(true)}
         playlistCount={displaySongs.length}
       />
+      </div>
 
       {/* ── 当前播放列表抽屉（底部弹出） ── */}
       {showPlaylistDrawer && (
         <>
           <div
-            className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm"
+            className="fixed inset-0 z-[90] bg-black/60 backdrop-blur-sm fade-in"
             onClick={() => setShowPlaylistDrawer(false)}
             aria-hidden
           />

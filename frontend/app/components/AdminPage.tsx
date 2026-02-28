@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { adminApi, friendsApi, uploadFile } from '../lib/api';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { adminApi, friendsApi, uploadFile, cloudApi, type CloudItem } from '../lib/api';
 import { User, Song, Friend } from '../lib/types';
 
 interface Props {
@@ -10,7 +10,7 @@ interface Props {
   onUserUpdate: (user: User) => void;
 }
 
-type AdminTab = 'upload' | 'songs' | 'friends' | 'users';
+type AdminTab = 'upload' | 'songs' | 'friends' | 'users' | 'invites' | 'cloud';
 
 const VISIBILITY_OPTIONS = ['public', 'friends', 'private'] as const;
 
@@ -37,6 +37,7 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
   // Songs state
   const [songs, setSongs] = useState<Song[]>([]);
   const [songSearch, setSongSearch] = useState('');
+  const [adminAlbumFilter, setAdminAlbumFilter] = useState<string | null>(null);
   const [loadingSongs, setLoadingSongs] = useState(false);
   const [selectedSong, setSelectedSong] = useState<Song | null>(null);
   const [scanResult, setScanResult] = useState('');
@@ -69,6 +70,18 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
 
+  // Invite codes
+  const [inviteCodes, setInviteCodes] = useState<Array<{ id: number; code: string; usedAt: string | null; usedById: number | null; createdAt: string }>>([]);
+  const [loadingInvites, setLoadingInvites] = useState(false);
+  const [creatingInvite, setCreatingInvite] = useState(false);
+
+  // 网盘（仅后台展示）：子目录即专辑，文件即歌曲列表
+  const [cloudProvider, setCloudProvider] = useState<'gdrive' | 'onedrive' | null>(null);
+  const [cloudFolderStack, setCloudFolderStack] = useState<Array<{ id: string; name: string }>>([]);
+  const [cloudItems, setCloudItems] = useState<CloudItem[]>([]);
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState('');
+
   const loadFriends = useCallback(async () => {
     setLoadingFriends(true);
     try { setFriends(await friendsApi.list(token)); } finally { setLoadingFriends(false); }
@@ -85,11 +98,59 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
     try { const d = await adminApi.users.list(token); setAllUsers(d); setUsers(d); } finally { setLoadingUsers(false); }
   }, [token]);
 
+  const loadInviteCodes = useCallback(async () => {
+    setLoadingInvites(true);
+    try { setInviteCodes(await adminApi.inviteCodes.list(token)); } finally { setLoadingInvites(false); }
+  }, [token]);
+
+  const loadCloudItems = useCallback(async (provider: 'gdrive' | 'onedrive', folderId?: string) => {
+    setCloudLoading(true);
+    setCloudError('');
+    try {
+      const api = provider === 'gdrive' ? cloudApi.gdrive : cloudApi.onedrive;
+      const res = await api.list(token, folderId);
+      setCloudItems(res.items || []);
+      setCloudProvider(provider);
+    } catch (e) {
+      setCloudError(e instanceof Error ? e.message : '加载网盘失败');
+      setCloudItems([]);
+    } finally {
+      setCloudLoading(false);
+    }
+  }, [token]);
+
+  const openCloudFolder = useCallback((item: CloudItem) => {
+    if (item.type !== 'folder') return;
+    setCloudFolderStack((prev) => [...prev, { id: item.id, name: item.name }]);
+    loadCloudItems(cloudProvider!, item.id);
+  }, [cloudProvider, loadCloudItems]);
+
+  const goBackCloudFolder = useCallback((index: number) => {
+    setCloudFolderStack((prev) => prev.slice(0, index));
+    const folderId = index === 0 ? undefined : cloudFolderStack[index - 1]?.id;
+    loadCloudItems(cloudProvider!, folderId);
+  }, [cloudProvider, cloudFolderStack, loadCloudItems]);
+
+  const adminAlbums = useMemo(() => {
+    const set = new Set(songs.map((s) => s.album || '(未分类)'));
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [songs]);
+
+  const displaySongs = useMemo(() => {
+    if (!adminAlbumFilter) return songs;
+    return songs.filter((s) => (s.album || '(未分类)') === adminAlbumFilter);
+  }, [songs, adminAlbumFilter]);
+
   useEffect(() => {
     if (activeTab === 'friends') loadFriends();
     if (activeTab === 'songs') { loadSongs(); loadUsers(); }
     if (activeTab === 'users') loadUsers();
-  }, [activeTab, loadFriends, loadSongs, loadUsers]);
+    if (activeTab === 'invites') loadInviteCodes();
+    if (activeTab === 'cloud') {
+      setCloudFolderStack([]);
+      loadCloudItems('gdrive').catch(() => loadCloudItems('onedrive'));
+    }
+  }, [activeTab, loadFriends, loadSongs, loadUsers, loadInviteCodes, loadCloudItems]);
 
   // ─── Upload ─────────────────────────────────────────────────────────────
   const handleDrop = (e: React.DragEvent) => {
@@ -170,10 +231,11 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
   };
 
   const toggleSelectAll = () => {
-    if (selectedSongIds.size === songs.length) {
-      setSelectedSongIds(new Set());
+    if (displaySongs.length > 0 && selectedSongIds.size === displaySongs.length) {
+      const toRemove = new Set(displaySongs.map((s) => s.id));
+      setSelectedSongIds((prev) => new Set(Array.from(prev).filter((id) => !toRemove.has(id))));
     } else {
-      setSelectedSongIds(new Set(songs.map((s) => s.id)));
+      setSelectedSongIds((prev) => new Set(Array.from(prev).concat(displaySongs.map((s) => s.id))));
     }
   };
 
@@ -228,6 +290,8 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
     { key: 'songs', label: '歌曲管理' },
     { key: 'friends', label: '好友管理' },
     { key: 'users', label: '用户管理' },
+    { key: 'invites', label: '邀请码' },
+    { key: 'cloud', label: '网盘' },
   ];
 
   return (
@@ -335,7 +399,7 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
       {/* ── 歌曲管理 ── */}
       {activeTab === 'songs' && (
         <div className="space-y-4">
-          <div className="flex gap-2 flex-wrap">
+          <div className="flex gap-2 flex-wrap items-center">
             <input
               className="input-field flex-1 min-w-32 text-sm"
               placeholder="搜索标题 / 歌手 / 路径…"
@@ -343,6 +407,17 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
               onChange={(e) => setSongSearch(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && loadSongs(songSearch)}
             />
+            <select
+              className="input-field text-sm min-w-28"
+              value={adminAlbumFilter ?? ''}
+              onChange={(e) => setAdminAlbumFilter(e.target.value === '' ? null : e.target.value)}
+              title="按专辑筛选"
+            >
+              <option value="">全部专辑</option>
+              {adminAlbums.map((album) => (
+                <option key={album} value={album}>{album}</option>
+              ))}
+            </select>
             <button className="btn-secondary" onClick={() => loadSongs(songSearch)}>刷新</button>
             <button className="btn-primary" onClick={() => setShowNewSongModal(true)}>新增歌曲</button>
             <button className="btn-secondary" onClick={scanLocal} disabled={scanning}>
@@ -364,7 +439,7 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
           {selectedSongIds.size > 0 && (
             <div className="glass-card px-4 py-3 flex flex-wrap items-center gap-3 fade-in">
               <span className="text-sm font-medium" style={{ color: '#60a5fa' }}>
-                已选 {selectedSongIds.size} / {songs.length} 首
+                已选 {selectedSongIds.size} / {displaySongs.length} 首
               </span>
               <button
                 className="btn-ghost text-xs"
@@ -421,8 +496,10 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
           <div className="panel-card p-4 overflow-x-auto">
             {loadingSongs ? (
               <p className="text-text-muted text-sm text-center py-8">加载中…</p>
-            ) : songs.length === 0 ? (
-              <p className="text-text-muted text-sm text-center py-8">暂无歌曲</p>
+            ) : displaySongs.length === 0 ? (
+              <p className="text-text-muted text-sm text-center py-8">
+                {songs.length === 0 ? '暂无歌曲' : '当前专辑下无歌曲'}
+              </p>
             ) : (
               <table className="w-full text-sm">
                 <thead>
@@ -431,18 +508,18 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
                       <input
                         type="checkbox"
                         className="song-check"
-                        checked={selectedSongIds.size === songs.length && songs.length > 0}
+                        checked={displaySongs.length > 0 && selectedSongIds.size === displaySongs.length}
                         onChange={toggleSelectAll}
-                        title="全选/取消"
+                        title="全选/取消当前列表"
                       />
                     </th>
-                    {['标题', '歌手', '可见性', '用户', '路径', '操作'].map((h) => (
+                    {['标题', '歌手', '专辑', '可见性', '用户', '路径', '操作'].map((h) => (
                       <th key={h} className="text-left py-2 pr-3 font-medium whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {songs.map((song) => {
+                  {displaySongs.map((song) => {
                     const isChecked = selectedSongIds.has(song.id);
                     return (
                       <tr
@@ -466,6 +543,7 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
                         </td>
                         <td className="py-2 pr-3 max-w-40 truncate text-text-primary">{song.title}</td>
                         <td className="py-2 pr-3 max-w-28 truncate text-text-secondary">{song.artist || '—'}</td>
+                        <td className="py-2 pr-3 max-w-28 truncate text-text-secondary">{song.album || '—'}</td>
                         <td className="py-2 pr-3"><Badge v={song.visibility} /></td>
                         <td className="py-2 pr-3 text-text-muted">{song.owner?.username}</td>
                         <td className="py-2 pr-3 text-text-muted text-xs max-w-36 truncate">{song.sourcePath}</td>
@@ -580,6 +658,127 @@ export default function AdminPage({ token, currentUser, onUserUpdate }: Props) {
                 ))}
               </tbody>
             </table>
+          )}
+        </div>
+      )}
+
+      {/* ── 邀请码 ── */}
+      {activeTab === 'invites' && (
+        <div className="panel-card p-4 space-y-4">
+          <p className="text-text-muted text-sm">生成邀请码供新用户注册使用，每个邀请码仅能使用一次。</p>
+          <div className="flex items-center gap-2">
+            <button
+              className="btn-primary"
+              disabled={creatingInvite}
+              onClick={async () => {
+                setCreatingInvite(true);
+                try {
+                  const row = await adminApi.inviteCodes.create(token);
+                  setInviteCodes((prev) => [{ ...row, usedAt: null, usedById: null }, ...prev]);
+                  await navigator.clipboard.writeText(row.code);
+                  alert(`已生成并已复制到剪贴板：${row.code}`);
+                } catch (e) {
+                  alert(e instanceof Error ? e.message : '生成失败');
+                } finally {
+                  setCreatingInvite(false);
+                }
+              }}
+            >
+              {creatingInvite ? '…' : '生成邀请码'}
+            </button>
+            <button className="btn-secondary" onClick={loadInviteCodes} disabled={loadingInvites}>刷新</button>
+          </div>
+          {loadingInvites ? (
+            <p className="text-text-muted text-sm">加载中…</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-text-muted border-b border-border">
+                  <th className="text-left py-2 pr-4 font-medium">邀请码</th>
+                  <th className="text-left py-2 pr-4 font-medium">状态</th>
+                  <th className="text-left py-2 pr-4 font-medium">创建时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                {inviteCodes.map((row) => (
+                  <tr key={row.id} className="border-b border-border/40">
+                    <td className="py-2.5 pr-4 font-mono text-text-primary">{row.code}</td>
+                    <td className="py-2.5 pr-4">
+                      {row.usedAt
+                        ? <span className="text-xs text-text-muted">已使用</span>
+                        : <span className="text-xs text-emerald-500">未使用</span>}
+                    </td>
+                    <td className="py-2.5 pr-4 text-text-muted text-xs">{new Date(row.createdAt).toLocaleString('zh-CN')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {!loadingInvites && inviteCodes.length === 0 && (
+            <p className="text-text-muted text-sm">暂无邀请码，点击「生成邀请码」创建。</p>
+          )}
+        </div>
+      )}
+
+      {/* ── 网盘（仅后台展示，子目录即专辑） ── */}
+      {activeTab === 'cloud' && (
+        <div className="panel-card p-4 space-y-4">
+          <p className="text-text-muted text-sm">网盘仅在此处查看，读取规则与本地库一致：子目录视为专辑，文件为歌曲。若未配置网盘则此处无数据。</p>
+          {/* 面包屑 */}
+          <div className="flex flex-wrap items-center gap-1 text-sm">
+            <button
+              type="button"
+              className="text-text-muted hover:text-text-primary transition-colors"
+              onClick={() => { setCloudFolderStack([]); if (cloudProvider) loadCloudItems(cloudProvider); }}
+            >
+              根目录
+            </button>
+            {cloudFolderStack.map((f, i) => (
+              <span key={f.id} className="flex items-center gap-1">
+                <span className="text-text-muted">/</span>
+                <button
+                  type="button"
+                  className="text-text-muted hover:text-text-primary transition-colors truncate max-w-32"
+                  onClick={() => goBackCloudFolder(i)}
+                >
+                  {f.name}
+                </button>
+              </span>
+            ))}
+          </div>
+          {cloudError && <p className="text-red-400 text-sm">{cloudError}</p>}
+          {cloudLoading ? (
+            <p className="text-text-muted text-sm">加载中…</p>
+          ) : cloudItems.length === 0 ? (
+            <p className="text-text-muted text-sm">当前目录为空或未配置网盘。</p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-text-muted font-medium">专辑（子目录）</p>
+              <div className="flex flex-wrap gap-2">
+                {cloudItems.filter((i) => i.type === 'folder').map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-bg-card hover:bg-bg-hover transition-colors text-left"
+                    onClick={() => openCloudFolder(item)}
+                  >
+                    <svg viewBox="0 0 24 24" className="w-5 h-5 text-text-muted flex-shrink-0" fill="currentColor">
+                      <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" />
+                    </svg>
+                    <span className="text-sm text-text-primary truncate max-w-48">{item.name}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-text-muted font-medium mt-4">歌曲（音频文件）</p>
+              <ul className="divide-y divide-border/60 rounded-lg border border-border overflow-hidden">
+                {cloudItems.filter((i) => i.type === 'file').map((item) => (
+                  <li key={item.id} className="flex items-center justify-between px-3 py-2 bg-bg-card hover:bg-bg-hover text-sm">
+                    <span className="text-text-primary truncate flex-1">{item.name}</span>
+                    <span className="text-text-muted text-xs ml-2">{(item.size / 1024).toFixed(1)} KB</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       )}

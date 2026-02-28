@@ -18,6 +18,9 @@
 | 上传 | 管理员拖拽/点选上传音视频文件（≤500 MB） |
 | 外站搜索 | 对接 NeteaseCloudMusicApi，搜索并直接播放外站曲目 |
 | URL 播放 | 直接播放任意音频/视频 URL，支持手动指定类型 + HEAD 探测 |
+| **播放状态恢复** | 按账号保存当前歌单与播放进度，下次进入自动回显 |
+| **云端网盘** | 从 Google Drive / OneDrive 列举并流式播放音频（需配置凭据） |
+| **本地缓存** | 音频流边听边存，LRU 淘汰（最多约 100 首），下次直接走缓存 |
 | 管理后台 | 用户管理、歌曲增删改查、**批量修改可见性**、**批量删除**（可选同时删文件）、目录扫描（全量同步） |
 | PWA | 添加到桌面、锁屏媒体控制（Media Session API） |
 
@@ -50,6 +53,7 @@ MusicApp/
 ├── docker-compose.yml
 ├── .env.example              # 环境变量模板
 ├── DEPLOY.md                 # 服务器部署 & Nginx 配置详细指南
+├── DEPLOY-FROM-SCRATCH.md    # 从零部署（无 Git/Nginx/Docker 时按此文档操作）
 └── README.md
 ```
 
@@ -286,6 +290,22 @@ NETEASE_COOKIE=   # 可选，登录 Cookie 可提高搜索质量
 | GET  | `/api/songs/:id`  | 单曲详情                    |
 | GET  | `/api/stream/:id` | 媒体流（支持 Range 请求）   |
 
+### 播放状态（按用户恢复）
+
+| 方法 | 路径                       | 描述                     |
+|------|----------------------------|--------------------------|
+| GET  | `/api/me/playback-state`   | 获取当前用户播放状态     |
+| PUT  | `/api/me/playback-state`   | 保存歌单、进度、模式等   |
+
+### 云端网盘（可选，需配置凭据）
+
+| 方法 | 路径                                | 描述                     |
+|------|-------------------------------------|--------------------------|
+| GET  | `/api/cloud/gdrive/list`            | 列举 Google Drive 音频   |
+| GET  | `/api/cloud/gdrive/stream/:fileId`  | 流式播放 GDrive 文件     |
+| GET  | `/api/cloud/onedrive/list`         | 列举 OneDrive 音频       |
+| GET  | `/api/cloud/onedrive/stream/:itemId`| 流式播放 OneDrive 文件   |
+
 ### 评论
 
 | 方法 | 路径                        | 描述         |
@@ -395,6 +415,10 @@ volumes:
 2. 删除 MySQL 数据卷（会丢失所有数据）：`docker compose down -v`
 3. 重新启动：`docker compose up -d --build`
 
+**Q: 云端网盘（Google Drive / OneDrive）如何配置**
+
+参见 [云端网盘配置说明](./docs/CLOUD-DRIVE-SETUP.md)。需在 `.env` 中配置对应凭据后，播放器「网盘」标签页即可列举并播放云端音频。
+
 ---
 
 ## 技术栈
@@ -407,4 +431,4 @@ volumes:
 | 鉴权   | JWT（30 天有效期）                                          |
 | 部署   | Docker Compose（一键启动）+ Nginx 反向代理（生产环境）      |
 
-> 详细服务器部署步骤请参见 [DEPLOY.md](./DEPLOY.md)
+> 服务器部署：**全新服务器**（未装 Git/Nginx/Docker）请按 [DEPLOY-FROM-SCRATCH.md](./DEPLOY-FROM-SCRATCH.md) 从零操作；已有环境或需 80 端口占用、DNS-01 证书等详见 [DEPLOY.md](./DEPLOY.md)。

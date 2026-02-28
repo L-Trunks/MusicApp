@@ -15,6 +15,7 @@ export default function LoginPage({ onAuth }: Props) {
   const [captchaId, setCaptchaId] = useState('');
   const [captchaQuestion, setCaptchaQuestion] = useState('');
   const [captchaAnswer, setCaptchaAnswer] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [loadingCaptcha, setLoadingCaptcha] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -50,7 +51,7 @@ export default function LoginPage({ onAuth }: Props) {
       const result =
         tab === 'login'
           ? await authApi.login(username, password, captchaId, captchaAnswer.trim())
-          : await authApi.register(username, password, captchaId, captchaAnswer.trim());
+          : await authApi.register(username, password, captchaId, captchaAnswer.trim(), inviteCode.trim());
       localStorage.setItem('token', result.token);
       localStorage.setItem('user', JSON.stringify(result.user));
       onAuth(result);
@@ -144,6 +145,20 @@ export default function LoginPage({ onAuth }: Props) {
                 required
               />
             </div>
+
+            {tab === 'register' && (
+              <div>
+                <label className="block text-xs text-text-muted mb-1.5 uppercase tracking-wide">邀请码</label>
+                <input
+                  className="input-field w-full"
+                  placeholder="请输入邀请码"
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                  autoComplete="off"
+                  required={tab === 'register'}
+                />
+              </div>
+            )}
 
             {/* 验证码 */}
             <div>

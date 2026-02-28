@@ -24,11 +24,12 @@ export const authApi = {
     username: string,
     password: string,
     captchaId: string,
-    captchaAnswer: string
+    captchaAnswer: string,
+    inviteCode: string
   ) =>
     request<{ token: string; user: import('./types').User }>('/api/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ username, password, captchaId, captchaAnswer }),
+      body: JSON.stringify({ username, password, captchaId, captchaAnswer, inviteCode: inviteCode.trim() }),
     }),
   login: (
     username: string,
@@ -40,7 +41,8 @@ export const authApi = {
       method: 'POST',
       body: JSON.stringify({ username, password, captchaId, captchaAnswer }),
     }),
-  me: (token: string) => request<import('./types').User>('/api/auth/me', { token }),
+  me: (token: string) =>
+    request<{ user: import('./types').User; token: string }>('/api/auth/me', { token }),
 };
 
 // ---- Songs ----
@@ -102,6 +104,39 @@ export const playlistsApi = {
     request<{ message: string }>(`/api/playlists/${id}/songs/${songId}`, { method: 'DELETE', token }),
 };
 
+// ---- Playback state (per-user restore) ----
+export interface PlaybackStatePayload {
+  songIds: number[];
+  currentIndex: number;
+  currentTime: number;
+  playMode: 'sequential' | 'shuffle' | 'repeat-one';
+  volume?: number;
+  playbackRate?: number;
+  shuffleOrder?: number[];
+  queueExtra?: Array<{
+    title: string;
+    artist: string;
+    album: string;
+    sourcePath: string;
+    coverUrl?: string;
+    durationSec: number;
+    isVideoHint?: boolean;
+  }>;
+  /** 单曲进度（仅对 durationSec >= 600 的歌曲记录），songId -> 秒 */
+  lastPositionBySongId?: Record<number, number>;
+}
+
+export const playbackStateApi = {
+  get: (token: string) =>
+    request<PlaybackStatePayload | null>('/api/me/playback-state', { token }),
+  put: (token: string, state: PlaybackStatePayload) =>
+    request<{ ok: boolean }>('/api/me/playback-state', {
+      method: 'PUT',
+      body: JSON.stringify(state),
+      token,
+    }),
+};
+
 // ---- Upload ----
 export async function uploadFile(
   token: string,
@@ -122,6 +157,43 @@ export async function uploadFile(
   return data;
 }
 
+// ---- Cloud (Google Drive / OneDrive) ----
+export interface CloudFile {
+  id: string;
+  name: string;
+  mimeType?: string;
+  size: number;
+}
+
+export type CloudItem = {
+  type: 'folder' | 'file';
+  id: string;
+  name: string;
+  mimeType?: string;
+  size: number;
+};
+
+export const cloudApi = {
+  gdrive: {
+    list: (token: string, folderId?: string) =>
+      request<{ items: CloudItem[] }>(
+        `/api/cloud/gdrive/list${folderId ? `?folderId=${encodeURIComponent(folderId)}` : ''}`,
+        { token }
+      ),
+    streamUrl: (fileId: string, token: string) =>
+      `${API_BASE}/api/cloud/gdrive/stream/${encodeURIComponent(fileId)}?t=${encodeURIComponent(token)}`,
+  },
+  onedrive: {
+    list: (token: string, folderId?: string) =>
+      request<{ items: CloudItem[] }>(
+        `/api/cloud/onedrive/list${folderId ? `?folderId=${encodeURIComponent(folderId)}` : ''}`,
+        { token }
+      ),
+    streamUrl: (itemId: string, token: string) =>
+      `${API_BASE}/api/cloud/onedrive/stream/${encodeURIComponent(itemId)}?t=${encodeURIComponent(token)}`,
+  },
+};
+
 // ---- External Search ----
 export const searchApi = {
   external: (token: string, q: string, limit = 30) =>
@@ -138,6 +210,14 @@ export const searchApi = {
 
 // ---- Admin ----
 export const adminApi = {
+  inviteCodes: {
+    list: (token: string) =>
+      request<Array<{ id: number; code: string; usedAt: string | null; usedById: number | null; createdAt: string }>>('/api/admin/invite-codes', { token }),
+    create: (token: string) =>
+      request<{ id: number; code: string; createdAt: string }>('/api/admin/invite-codes', {
+        method: 'POST', token,
+      }),
+  },
   users: {
     list: (token: string) =>
       request<import('./types').User[]>('/api/admin/users', { token }),
