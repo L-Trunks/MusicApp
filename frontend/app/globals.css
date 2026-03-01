@@ -290,6 +290,20 @@ input[type='range'].volume-bar:hover::-webkit-slider-thumb {
 .animate-slide-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
 
 /* ── 播放器底栏 ──────────────────────────────────────────────────── */
+/* 主内容区预留底栏+安全区高度（PWA/全面屏底部横条） */
+.player-page-bottom-spacer {
+  padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+}
+
+/* 固定底栏容器：延伸进 safe-area，用深色背景覆盖系统“上滑”条，避免白边 */
+.player-bar-fixed {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: linear-gradient(to top,
+    rgba(3, 5, 10, 0.98) 0%,
+    rgba(7, 10, 14, 0.95) 100%
+  );
+}
+
 .player-bar-bg {
   background: linear-gradient(to top,
     rgba(3, 5, 10, 0.98) 0%,

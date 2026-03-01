@@ -115,6 +115,8 @@ export default function PlayerPage({ token, currentUser }: Props) {
   const hasRestoredState = useRef(false);
   const skipNextFilterForRestore = useRef(false);
   const restoredQueueActive = useRef(false);
+  /** 播放状态恢复失败时重试（下拉刷新/网络慢时最多再试 2 次） */
+  const [restoreRetryTick, setRestoreRetryTick] = useState(0);
   // 当前播放的歌曲 ID，用于在筛选/搜索后仍能定位
   const currentSongIdRef = useRef<number>(-1);
   // 当前用于上一首/下一首的列表，与 displaySongs 同步，避免闭包陈旧
@@ -133,13 +135,25 @@ export default function PlayerPage({ token, currentUser }: Props) {
 
   useEffect(() => { loadPlaylists(); }, [loadPlaylists]);
 
-  // ── restore playback state (once per session) ─────────────────────────────
+  /** token 更新（如 me 刷新）时重置恢复重试次数，以便用新 token 再试 */
+  useEffect(() => {
+    setRestoreRetryTick(0);
+  }, [token]);
+
+  // ── restore playback state (once per session, retry if token refreshes or after failure) ─
+  const RESTORE_MAX_ATTEMPTS = 3;
   useEffect(() => {
     if (!token || hasRestoredState.current) return;
+    if (restoreRetryTick >= RESTORE_MAX_ATTEMPTS) return;
     let cancelled = false;
     playbackStateApi.get(token).then((state) => {
-      if (cancelled || !state || !state.songIds?.length) return;
-      hasRestoredState.current = true;
+      if (cancelled) return;
+      if (!state || !state.songIds?.length) {
+        hasRestoredState.current = true;
+        return;
+      }
+      restoredQueueActive.current = true;
+      skipNextFilterForRestore.current = true;
       songsApi.list(token).then((songs) => {
         if (cancelled) return;
         const list: Song[] = state.songIds
@@ -149,8 +163,6 @@ export default function PlayerPage({ token, currentUser }: Props) {
           makeVirtualSong(e.title, e.artist, e.album, e.sourcePath, e.coverUrl || '', e.durationSec, e.isVideoHint)
         );
         const restored = [...list, ...extra];
-        skipNextFilterForRestore.current = true;
-        restoredQueueActive.current = true;
         setAllSongs(songs);
         setDisplaySongs(restored);
         displaySongsRef.current = restored;
@@ -165,10 +177,27 @@ export default function PlayerPage({ token, currentUser }: Props) {
         if (cur) currentSongIdRef.current = cur.id;
         restoreCurrentTimeRef.current = state.currentTime ?? 0;
         lastPositionBySongIdRef.current = state.lastPositionBySongId ?? {};
+        hasRestoredState.current = true;
+      }).catch(() => {
+        if (!cancelled) {
+          hasRestoredState.current = false;
+          restoredQueueActive.current = false;
+          skipNextFilterForRestore.current = false;
+          if (restoreRetryTick < RESTORE_MAX_ATTEMPTS - 1) {
+            setTimeout(() => setRestoreRetryTick((t) => t + 1), 1500);
+          }
+        }
       });
-    }).catch(() => {});
+    }).catch(() => {
+      if (!cancelled) {
+        hasRestoredState.current = false;
+        if (restoreRetryTick < RESTORE_MAX_ATTEMPTS - 1) {
+          setTimeout(() => setRestoreRetryTick((t) => t + 1), 1500);
+        }
+      }
+    });
     return () => { cancelled = true; };
-  }, [token]);
+  }, [token, restoreRetryTick]);
 
   // ── load songs (always fetches all, filtering is client-side) ──────────────
   const loadSongs = useCallback(async () => {
@@ -655,7 +684,7 @@ export default function PlayerPage({ token, currentUser }: Props) {
   // ─── render ───────────────────────────────────────────────────────────────
   const PLAYER_BAR_H = 80;
   return (
-    <div className="h-full flex flex-col overflow-hidden" style={{ paddingBottom: PLAYER_BAR_H }}>
+    <div className="h-full flex flex-col overflow-hidden player-page-bottom-spacer">
       {/* ── main area: sidebar + song list（仅此区域可滚动）── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
@@ -1241,7 +1270,7 @@ export default function PlayerPage({ token, currentUser }: Props) {
       )}
 
       {/* ── Player Bar（固定底部）── */}
-      <div className="fixed bottom-0 left-0 right-0 z-30" style={{ height: PLAYER_BAR_H }}>
+      <div className="player-bar-fixed fixed bottom-0 left-0 right-0 z-30" style={{ minHeight: PLAYER_BAR_H }}>
         <PlayerBar
         currentSong={currentSong}
         isPlaying={isPlaying}

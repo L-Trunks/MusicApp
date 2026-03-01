@@ -12,6 +12,8 @@
 3. [申请 Let's Encrypt 证书（DNS-01，无需 80 端口）](#3-申请-lets-encrypt-证书dns-01无需-80-端口)
 4. [配置 Nginx 反向代理](#4-配置-nginx-反向代理)
 5. [配置项目环境变量](#5-配置项目环境变量)
+  - [5.1 本地构建后上传（构建机内存较小时）](#51-本地构建后上传构建机内存较小时)
+  - [5.2 本机构建 → 保存为 tar → SCP 上传 → 服务器加载启动](#52-本机构建--保存为-tar--scp-上传--服务器加载启动)
 6. [首次部署](#6-首次部署)
 7. [防火墙配置](#7-防火墙配置)
 8. [验证部署](#8-验证部署)
@@ -45,13 +47,15 @@ mysql:3306 (仅 Docker 网络内可达)
 
 **端口分配**
 
-| 用途 | 宿主机端口 | 说明 |
-|------|-----------|------|
-| HTTPS | 443 | 对外唯一入口，Nginx 处理 |
-| HTTP | 80 | 已被占用，本项目不使用 |
-| 前端 | 127.0.0.1:3000 | 仅本机内部访问 |
-| 后端 | 127.0.0.1:3001 | 仅本机内部访问 |
-| MySQL | 无（不暴露） | 仅 Docker 网络内部 |
+
+| 用途    | 宿主机端口          | 说明              |
+| ----- | -------------- | --------------- |
+| HTTPS | 443            | 对外唯一入口，Nginx 处理 |
+| HTTP  | 80             | 已被占用，本项目不使用     |
+| 前端    | 127.0.0.1:3000 | 仅本机内部访问         |
+| 后端    | 127.0.0.1:3001 | 仅本机内部访问         |
+| MySQL | 无（不暴露）         | 仅 Docker 网络内部   |
+
 
 **域名解析示例（music.chrisers.cc）**  
 主域 chrisers.cc 时，在 DNS 处添加 A 记录：主机记录 **music**，记录值 **服务器公网 IP**。保存后 `ping music.chrisers.cc` 应解析到该 IP。
@@ -117,17 +121,18 @@ Press Enter to Continue
 ```
 
 **操作步骤：**
+
 1. 登录你的域名 DNS 控制台（阿里云、Cloudflare、腾讯云等）
 2. 添加一条 TXT 记录：
-   - 主机记录：`_acme-challenge.music`
-   - 记录值：`xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+  - 主机记录：`_acme-challenge.music`
+  - 记录值：`xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
 3. 等待 DNS 生效（通常 30 秒到 2 分钟，可用下面命令验证）：
-   ```bash
+  ```bash
    # 验证 DNS TXT 是否生效
    dig TXT _acme-challenge.music.yourdomain.com +short
    # 或
    nslookup -type=TXT _acme-challenge.music.yourdomain.com 8.8.8.8
-   ```
+  ```
 4. 看到记录值出现后，回到终端按 **Enter**
 5. 证书申请成功，文件位于：`/etc/letsencrypt/live/music.yourdomain.com/`
 
@@ -175,12 +180,14 @@ sudo certbot certonly \
 
 ### 3.3 其他 DNS 提供商
 
-| 提供商 | 插件包名 | 参考文档 |
-|--------|---------|---------|
-| 阿里云 / DNSPod | `certbot-dns-aliyun`（第三方） | https://github.com/tengattack/certbot-dns-aliyun |
-| AWS Route53 | `python3-certbot-dns-route53` | certbot 官方插件 |
-| Google Cloud DNS | `python3-certbot-dns-google` | certbot 官方插件 |
-| 其他 | 手动 DNS-01（参考 3.1） | — |
+
+| 提供商              | 插件包名                          | 参考文档                                                                                                 |
+| ---------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 阿里云 / DNSPod     | `certbot-dns-aliyun`（第三方）     | [https://github.com/tengattack/certbot-dns-aliyun](https://github.com/tengattack/certbot-dns-aliyun) |
+| AWS Route53      | `python3-certbot-dns-route53` | certbot 官方插件                                                                                         |
+| Google Cloud DNS | `python3-certbot-dns-google`  | certbot 官方插件                                                                                         |
+| 其他               | 手动 DNS-01（参考 3.1）             | —                                                                                                    |
+
 
 ---
 
@@ -207,6 +214,7 @@ sudo nginx -t
 ```
 
 输出应为：
+
 ```
 nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
 nginx: configuration file /etc/nginx/nginx.conf test is successful
@@ -246,7 +254,18 @@ sudo systemctl reload nginx
 
 ## 5. 配置项目环境变量
 
-在服务器上进入项目目录，创建 `.env` 文件：
+项目支持两种构建环境：
+
+
+| 用途       | 环境文件              | 说明                                                                 |
+| -------- | ----------------- | ------------------------------------------------------------------ |
+| **本地构建** | `.env`（默认）        | 本地机构建镜像、本地联调；`docker compose build` 会读取 `.env`                     |
+| **生产构建** | `.env.production` | 生产环境 API 地址等；需执行 `docker compose --env-file .env.production build` |
+
+
+**在服务器上首次部署：**
+
+在服务器上进入项目目录，创建 `.env` 文件（用于运行时和本地构建）：
 
 ```bash
 cd /opt/MusicApp          # 或你克隆项目的路径
@@ -254,7 +273,15 @@ cp .env.example .env
 nano .env
 ```
 
-`.env` 关键配置：
+若要在**生产环境**下构建镜像（例如在服务器上构建且使用生产域名），请额外创建 `.env.production`：
+
+```bash
+cp .env.production.example .env.production
+nano .env.production
+# 将 NEXT_PUBLIC_API_URL、FRONTEND_URL 等改为生产域名
+```
+
+**.env 关键配置：**
 
 ```env
 # MySQL
@@ -279,9 +306,156 @@ NETEASE_COOKIE=
 ```
 
 > **生成随机 JWT_SECRET：**
+>
 > ```bash
 > openssl rand -base64 48
 > ```
+
+### 5.1 本地构建后上传（构建机内存较小时）
+
+若服务器或 CI 构建机内存较小（例如 backend 的 `npm run build` 容易 OOM），可在**本机**构建镜像后再上传到服务器：
+
+```bash
+# 在本机（项目根目录）
+# 1. 本地构建（使用 .env，适合本地/测试）
+npm run build
+# 或：docker compose build
+
+# 2. 给镜像打标签并推送到你的镜像仓库（按实际仓库地址修改）
+docker tag musicapp-backend your-registry/musicapp-backend:latest
+docker tag musicapp-frontend your-registry/musicapp-frontend:latest
+docker push your-registry/musicapp-backend:latest
+docker push your-registry/musicapp-frontend:latest
+
+# 3. 在服务器上拉取并启动（使用 docker-compose 的 image 而非 build）
+# 需在服务器 docker-compose 中改为 image: your-registry/musicapp-backend:latest 等
+```
+
+**生产环境构建（使用 .env.production）：**
+
+在本机若已配置好 `.env.production`（生产域名等），可用：
+
+```bash
+npm run build:production
+# 或：docker compose --env-file .env.production build
+```
+
+这样前端会注入生产环境的 `NEXT_PUBLIC_API_URL` 等变量。
+
+### 5.2 本机构建 → 保存为 tar → SCP 上传 → 服务器加载启动
+
+当构建机内存不足或希望在本地构建后再传到服务器时，可将镜像导出为 tar 文件，用 SCP 传到服务器后加载并启动。服务器**无需**安装 Node、无需拉取源码构建，只需 Docker、docker-compose、`.env` 和本说明中的文件即可。
+
+**数据库结构变更（本机构建时）：**  
+若修改了 `prisma/schema.prisma`，只需在**本地**执行 `npx prisma migrate dev` 生成迁移文件并提交到 Git；本机构建 backend 镜像时会把 `prisma/migrations/` 打进镜像。服务器上**无需**在本地对生产库执行迁移：新镜像加载并启动容器时，会自动执行 `npx prisma migrate deploy`，对服务器上的 MySQL 应用未执行的迁移。详见 [10.5 数据库结构变更](#105-数据库结构变更prisma-migrate)。
+
+#### 步骤一：本机构建镜像
+
+在项目根目录（包含 `docker-compose.yml` 的目录）执行：
+
+```bash
+# 使用 .env（本地/测试）
+npm run build
+# 或使用 .env.production（生产域名）
+npm run build:production
+```
+
+确认构建成功：
+
+```bash
+docker compose images
+# 应看到 musicapp-backend、musicapp-frontend 等
+```
+
+#### 步骤二：本机将镜像导出到项目目录
+
+镜像名称以当前目录名为项目名（如 `musicapp`），服务名为 `backend` / `frontend`，故镜像名为 `musicapp-backend`、`musicapp-frontend`。导出为 tar 到当前目录：
+
+```bash
+# 在项目根目录执行（Windows 可用 Git Bash 或 PowerShell）
+docker save -o musicapp-backend.tar musicapp-backend
+docker save -o musicapp-frontend.tar musicapp-frontend
+```
+
+若 `docker compose images` 中显示的镜像名带前缀（如 `musicapp-backend`），以实际名称为准。导出后当前目录会有 `musicapp-backend.tar`、`musicapp-frontend.tar`（体积较大，约数百 MB 至 1GB+）。
+
+#### 步骤三：本机通过 SCP 将所需文件传到服务器
+
+服务器上需要：
+
+- `docker-compose.yml`（必选）
+- `.env`（必选，运行时变量，与构建用 .env / .env.production 可不同）
+- `musicapp-backend.tar`、`musicapp-frontend.tar`（必选，镜像包）
+- `backend/music`（可选，若服务器上已有音乐目录可后续再建）
+- `mysql/init`（可选，仅需自定义初始化 SQL 时保留）
+
+在**本机**执行（将 `user`、`your-server`、`/opt/MusicApp` 换成实际 SSH 用户、主机和路径）：
+
+```bash
+# 创建服务器上的项目目录（若尚未存在）
+ssh user@your-server "mkdir -p /opt/MusicApp/backend/music /opt/MusicApp/mysql/init"
+
+# 上传 docker-compose、.env、两个镜像 tar
+scp docker-compose.yml .env user@your-server:/opt/MusicApp/
+scp musicapp-backend.tar musicapp-frontend.tar user@your-server:/opt/MusicApp/
+
+# 若有 mysql/init 自定义脚本也可一并上传
+# scp -r mysql/init user@your-server:/opt/MusicApp/mysql/
+```
+
+**说明：** 服务器上的 `.env` 使用**运行时**配置（数据库密码、JWT_SECRET、FRONTEND_URL 等），可与本机构建时用的 `.env` / `.env.production` 不同；构建时的 `NEXT_PUBLIC_API_URL` 已打进前端镜像，无需在服务器再改。
+
+#### 步骤四：在服务器上加载镜像并启动
+
+SSH 登录服务器后：
+
+```bash
+cd /opt/MusicApp
+
+# 1. 加载镜像（只需首次或更新镜像时执行）
+docker load -i musicapp-backend.tar
+docker load -i musicapp-frontend.tar
+
+# 2. 使用已加载的镜像启动，不重新构建（--no-build）
+docker compose up -d --no-build
+
+# 3. 查看状态
+docker compose ps
+docker compose logs backend --tail=30
+```
+
+**注意：** 必须加 `--no-build`，否则 compose 会尝试在服务器上执行 `build`（服务器若没有源码会失败，或重新构建耗时长）。
+
+#### 步骤五：验证
+
+```bash
+curl http://127.0.0.1:3001/api/health
+# 应返回：{"status":"ok","timestamp":"..."}
+```
+
+配置好 Nginx 后通过浏览器访问 `https://你的域名` 即可。
+
+#### 后续更新（仅更新 backend/frontend 镜像）
+
+1. 本机重新构建并导出：
+  ```bash
+   npm run build   # 或 npm run build:production
+   docker save -o musicapp-backend.tar musicapp-backend
+   docker save -o musicapp-frontend.tar musicapp-frontend
+  ```
+2. 本机上传覆盖服务器上的 tar：
+  ```bash
+   scp musicapp-backend.tar musicapp-frontend.tar user@your-server:/opt/MusicApp/
+  ```
+3. 服务器上重新加载并重启：
+  ```bash
+   cd /opt/MusicApp
+   docker load -i musicapp-backend.tar
+   docker load -i musicapp-frontend.tar
+   docker compose up -d --no-build
+  ```
+
+MySQL 使用 Docker 持久化卷，数据不会因镜像更新而丢失。
 
 ---
 
@@ -290,11 +464,16 @@ NETEASE_COOKIE=
 ```bash
 cd /opt/MusicApp
 
-# 1. 确认 .env 已配置好
+# 1. 确认 .env 已配置好（运行时与默认构建均使用 .env）
 cat .env
 
 # 2. 构建并启动所有服务（约 5-10 分钟，取决于网速）
+#    - 默认使用 .env 中的变量构建前端（NEXT_PUBLIC_API_URL 等）
+#    - 若需生产域名构建，请先配置 .env.production 后执行：
+#      docker compose --env-file .env.production up -d --build
 docker compose up -d --build
+
+# 若构建机内存不足导致 backend 构建 OOM，请在本机用 .env 或 .env.production 构建后上传镜像，见上文 5.1 或 5.2
 
 # 3. 查看启动状态
 docker compose ps
@@ -305,6 +484,18 @@ docker compose logs backend --tail=50
 # 5. 健康检查
 curl http://127.0.0.1:3001/api/health
 # 应返回：{"status":"ok","timestamp":"..."}
+```
+
+**方式 B：本机构建后 SCP 镜像到服务器**
+
+若已按 **5.2** 在本机构建并导出 tar、SCP 到服务器，则在服务器上执行：
+
+```bash
+cd /opt/MusicApp
+docker load -i musicapp-backend.tar
+docker load -i musicapp-frontend.tar
+docker compose up -d --no-build
+docker compose ps
 ```
 
 **期望的 `docker compose ps` 输出：**
@@ -472,12 +663,14 @@ cd /opt/MusicApp
 git pull origin main
 
 # 2. 重新构建并启动（--build 强制重新构建镜像）
+#    默认使用 .env；生产构建请用：docker compose --env-file .env.production up -d --build
 docker compose up -d --build
 
 # ⚠️ 说明：
 #   - MySQL 数据持久化在 docker volume，不会丢失
 #   - backend 容器启动时自动执行 prisma migrate deploy
-#   - 前端镜像会以 .env 中的 NEXT_PUBLIC_API_URL 重新构建
+#   - 前端镜像会以当前使用的 env 文件中的 NEXT_PUBLIC_API_URL 重新构建
+#   - 构建机内存不足时可本机构建后上传镜像，见 5.1
 
 # 3. 查看更新日志
 docker compose logs backend --tail=30
@@ -505,10 +698,10 @@ docker compose up -d --build frontend
 
 ### 10.5 数据库结构变更（Prisma Migrate）
 
-如果改了 `prisma/schema.prisma`，需要手动执行迁移：
+如果改了 `prisma/schema.prisma`，需要**在本地**生成迁移文件并提交；迁移的**应用**在服务器上由 backend 容器启动时自动完成。
 
 ```bash
-# 本地开发：生成迁移文件
+# 本地：生成迁移文件（会生成 prisma/migrations/ 下的 SQL）
 cd backend
 npx prisma migrate dev --name your_change_name
 
@@ -516,13 +709,19 @@ npx prisma migrate dev --name your_change_name
 git add prisma/migrations
 git commit -m "db: add your_change_name migration"
 git push
-
-# 服务器上：拉取并部署
-cd /opt/MusicApp
-git pull
-docker compose up -d --build backend
-# backend 容器启动时会自动执行 prisma migrate deploy
 ```
+
+**服务器上应用迁移：**
+
+- **方式 A：服务器上直接构建**  
+拉取代码后重新构建并启动 backend，容器启动时会自动执行 `prisma migrate deploy`：
+  ```bash
+  cd /opt/MusicApp
+  git pull
+  docker compose up -d --build backend
+  ```
+- **方式 B：本机构建 + SCP 镜像**  
+本机在包含最新 `prisma/migrations/` 的代码上构建 backend 镜像并导出 tar，SCP 到服务器后 `docker load` 并 `docker compose up -d --no-build`。backend 容器**首次启动**时会执行 `prisma migrate deploy`，将镜像内的新迁移应用到服务器上的 MySQL。**不需要**在本地对生产库执行迁移，也不需要服务器上有源码。
 
 ### 10.6 更新 Nginx 配置
 
@@ -573,45 +772,19 @@ sudo certbot certonly \
 
 1. 检查 `.env` 中 `NEXT_PUBLIC_API_URL` 是否为 `https://music.yourdomain.com`
 2. 前端是**构建时**注入环境变量，修改 `.env` 后必须重新构建：
-   ```bash
+  ```bash
    docker compose up -d --build frontend
-   ```
+  ```
 
 ### 音频/视频无法拖动进度
 
 Nginx 的 `proxy_buffering off` 已在配置中设置，如仍有问题：
+
 ```bash
 # 检查 Nginx 是否正确传递 Accept-Ranges 头
 curl -I "https://music.yourdomain.com/api/stream/1?t=TOKEN" | grep -i range
 # 应看到 Accept-Ranges: bytes
 ```
-
-### sing-box / 其他代理工具与 Nginx 共存
-
-如果服务器上已运行 sing-box 等代理工具并监听了 443 端口，需要协调端口分配：
-
-**方案 A：sing-box 监听非标准端口，Nginx 继续使用 443**
-
-修改 sing-box 配置，将入站端口改为如 `8443`，再用 Nginx 做 SNI 路由：
-
-```nginx
-# nginx.conf stream 块（四层代理，按域名分流）
-stream {
-    map $ssl_preread_server_name $backend {
-        music.yourdomain.com  127.0.0.1:3000_internal;
-        ~.                    127.0.0.1:8443;
-    }
-}
-```
-
-**方案 B：MusicApp 使用不同端口（如 8443）**
-
-修改 `nginx/musicapp.conf` 中的 `listen 443 ssl` → `listen 8443 ssl`，
-并将 `NEXT_PUBLIC_API_URL` 改为 `https://music.yourdomain.com:8443`。
-
-**方案 C：域名已有证书则直接复用**
-
-如果 sing-box 已为该域名申请了证书，修改 `nginx/musicapp.conf` 中的证书路径指向已有证书即可，无需重新申请。
 
 ### MySQL 数据库备份
 
@@ -629,17 +802,24 @@ docker compose exec -T mysql mysql \
 
 ## 附：完整操作速查表
 
-| 操作 | 命令 |
-|------|------|
-| 首次部署 | `docker compose up -d --build` |
-| 查看运行状态 | `docker compose ps` |
-| 查看实时日志 | `docker compose logs -f` |
-| 代码更新后重部署 | `docker compose up -d --build` |
-| 仅重启某个服务 | `docker compose restart backend` |
-| 停止所有服务 | `docker compose down` |
-| 停止并删除数据 | `docker compose down -v` ⚠️ 会删数据 |
-| 检查证书有效期 | `sudo certbot certificates` |
-| 手动续期测试 | `sudo certbot renew --dry-run` |
-| 重载 Nginx | `sudo systemctl reload nginx` |
-| 查看 Nginx 错误 | `sudo tail -f /var/log/nginx/musicapp_error.log` |
-| 数据库备份 | `docker compose exec mysql mysqldump -uroot -p$PASS musicapp > bak.sql` |
+
+| 操作             | 命令                                                                                                 |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| 首次部署（服务器上构建）   | `docker compose up -d --build`（默认读 .env）                                                           |
+| 首次部署（本机已导出的镜像） | 服务器：`docker load -i musicapp-backend.tar` 等，再 `docker compose up -d --no-build`（见 5.2）             |
+| 本机导出镜像         | `docker save -o musicapp-backend.tar musicapp-backend`（及 frontend，见 5.2）                           |
+| 生产环境构建并部署      | `docker compose --env-file .env.production up -d --build`                                          |
+| 本机构建（再 SCP 上传） | `npm run build` 或 `npm run build:production`（见 5.1、5.2）                                            |
+| 查看运行状态         | `docker compose ps`                                                                                |
+| 查看实时日志         | `docker compose logs -f`                                                                           |
+| 代码更新后重部署       | `docker compose up -d --build` 或 本机重新导出 tar 后服务器 `docker load` + `docker compose up -d --no-build` |
+| 仅重启某个服务        | `docker compose restart backend`                                                                   |
+| 停止所有服务         | `docker compose down`                                                                              |
+| 停止并删除数据        | `docker compose down -v` ⚠️ 会删数据                                                                   |
+| 检查证书有效期        | `sudo certbot certificates`                                                                        |
+| 手动续期测试         | `sudo certbot renew --dry-run`                                                                     |
+| 重载 Nginx       | `sudo systemctl reload nginx`                                                                      |
+| 查看 Nginx 错误    | `sudo tail -f /var/log/nginx/musicapp_error.log`                                                   |
+| 数据库备份          | `docker compose exec mysql mysqldump -uroot -p$PASS musicapp > bak.sql`                            |
+
+
